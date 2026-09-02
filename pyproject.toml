@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aabb-primitives"
+version = "0.1.0"
+description = "Vectorized pairwise relationships between axis-aligned bounding boxes."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Petros Georgoulas Wraight" },
+]
+dependencies = [
+    "beartype",
+    "jaxtyping",
+    "numpy",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "ruff",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+extend-exclude = ["presentation", ".presentation-work", ".uv-python"]
+force-exclude = true
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# Jaxtyping shape strings are not Python forward-reference expressions.
+# Single-axis "query" shapes use inline F821 exceptions; undefined-name checks stay enabled elsewhere.
+"src/aabb_primitives/relations.py" = ["F722"]
+"src/aabb_primitives/_thresholds.py" = ["F722"]
+
+[tool.ruff.lint.isort]
+split-on-trailing-comma = false
+
+[tool.ruff.format]
+skip-magic-trailing-comma = true
