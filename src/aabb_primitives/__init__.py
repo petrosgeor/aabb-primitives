@@ -1,5 +1,52 @@
-"""Vectorized pairwise relationships between axis-aligned bounding boxes."""
+"""Pairwise AABB geometry, predicates, and contact patches with Torch."""
 
-from aabb_primitives.relations import AABBAxis, AABBFace, PairwiseAABBRelations
+from aabb_primitives._validation import validate_aabbs, validate_thresholds
+from aabb_primitives.relations import (
+    AABBAxis,
+    AABBFace,
+    axis_overlap,
+    axis_overlap_all_axes,
+    contact_mask,
+    contained_by_mask,
+    intersection_bounds,
+    intersection_bounds_all_axes,
+    inward_axis_overlap_all_axes,
+    inward_projected_overlap_mask,
+    overlap_lengths,
+    overlap_lengths_all_axes,
+    projected_intersection_bounds,
+    projected_overlap_areas,
+    projected_overlap_mask,
+    query_face_areas,
+    query_face_contact_patches,
+    signed_distances,
+    signed_distances_all_faces,
+    tangential_overlap_lengths,
+    within_distance,
+)
 
-__all__ = ["AABBAxis", "AABBFace", "PairwiseAABBRelations"]
+__all__ = [
+    "AABBAxis",
+    "AABBFace",
+    "signed_distances",
+    "signed_distances_all_faces",
+    "axis_overlap",
+    "axis_overlap_all_axes",
+    "contained_by_mask",
+    "intersection_bounds",
+    "intersection_bounds_all_axes",
+    "overlap_lengths",
+    "overlap_lengths_all_axes",
+    "query_face_contact_patches",
+    "tangential_overlap_lengths",
+    "projected_overlap_mask",
+    "inward_projected_overlap_mask",
+    "inward_axis_overlap_all_axes",
+    "projected_overlap_areas",
+    "query_face_areas",
+    "projected_intersection_bounds",
+    "within_distance",
+    "contact_mask",
+    "validate_aabbs",
+    "validate_thresholds",
+]

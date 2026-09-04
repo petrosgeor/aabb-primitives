@@ -1,414 +1,465 @@
-import numpy as np
 import pytest
+import torch
 
-from aabb_primitives import AABBAxis, AABBFace, PairwiseAABBRelations
+import aabb_primitives as aabb
+from aabb_primitives import AABBAxis, AABBFace
 
 
-def test_rank_four_worlds_keep_environment_and_world_dimensions() -> None:
-    """Keep environment and world axes outside each pairwise matrix."""
-    world_aabbs = np.array(
-        [
-            [
-                [[0.0, 0.0, 0.0, 1.0, 1.0, 1.0], [1.0, 0.0, 0.0, 2.0, 1.0, 1.0]],
-                [[0.0, 0.0, 0.0, 1.0, 1.0, 1.0], [0.0, 1.0, 0.0, 1.0, 2.0, 1.0]],
-            ]
-        ],
-        dtype=np.float64,
+def test_signed_distances_preserve_face_order_and_orientation() -> None:
+    """Measure gaps, alignment, and crossing for all six oriented faces."""
+    query_aabbs = torch.tensor([[0.0, 0.0, 2.0, 2.0, 2.0, 4.0]], dtype=torch.float64)
+    reference_aabbs = torch.tensor(
+        [[0.0, 0.0, 0.0, 2.0, 2.0, 1.0], [0.0, 0.0, 0.0, 2.0, 2.0, 2.0], [0.0, 0.0, 0.0, 2.0, 2.0, 3.0]],
+        dtype=torch.float64,
     )
 
-    relations = PairwiseAABBRelations.from_aabbs(reference_aabbs=world_aabbs, query_aabbs=world_aabbs)
-
-    signed_distances = relations.signed_distances_all_faces()
-    assert signed_distances.shape == (1, 2, 2, 2, 6)
-    np.testing.assert_array_equal(signed_distances[0, 0, 0, 1], np.array([-2.0, 0.0, -1.0, -1.0, -1.0, -1.0]))
-    np.testing.assert_array_equal(signed_distances[0, 1, 0, 1], np.array([-1.0, -1.0, -2.0, 0.0, -1.0, -1.0]))
-
-
-def test_rank_four_methods_match_independent_rank_two_worlds() -> None:
-    """Keep every geometry calculation local to one environment and world."""
-    first_environment = np.array(
+    expected = torch.tensor(
         [
-            [[0.0, 0.0, 0.0, 1.0, 1.0, 1.0], [1.0, 0.0, 0.0, 2.0, 1.0, 1.0], [0.25, 0.25, 1.0, 0.75, 0.75, 2.0]],
-            [[0.0, 0.0, 0.0, 1.0, 1.0, 1.0], [0.0, 1.0, 0.0, 1.0, 2.0, 1.0], [2.0, 2.0, 2.0, 3.0, 3.0, 3.0]],
+            [-2.0, -2.0, -2.0, -2.0, 1.0, -4.0],
+            [-2.0, -2.0, -2.0, -2.0, 0.0, -4.0],
+            [-2.0, -2.0, -2.0, -2.0, -1.0, -4.0],
         ],
-        dtype=np.float64,
+        dtype=torch.float64,
     )
-    x_shift = np.array([5.0, 0.0, 0.0, 5.0, 0.0, 0.0])
-    reference_aabbs = np.stack((first_environment, first_environment + x_shift), axis=0)
-    query_aabbs = reference_aabbs[..., :2, :]
+    all_faces = aabb.signed_distances_all_faces(query_aabbs, reference_aabbs)
+    torch.testing.assert_close(all_faces[0], expected)
 
-    batched = PairwiseAABBRelations.from_aabbs(reference_aabbs=reference_aabbs, query_aabbs=query_aabbs)
-    method_calls = {
-        "signed_distances": lambda relations: relations.signed_distances(AABBFace.X_MAX),
-        "axis_overlap": lambda relations: relations.axis_overlap(AABBAxis.X),
-        "axis_overlap_all_axes": lambda relations: relations.axis_overlap_all_axes(),
-        "contained_by_mask": lambda relations: relations.contained_by_mask(),
-        "intersection_bounds": lambda relations: relations.intersection_bounds(AABBAxis.Y),
-        "intersection_bounds_all_axes": lambda relations: relations.intersection_bounds_all_axes(),
-        "overlap_lengths": lambda relations: relations.overlap_lengths(AABBAxis.Z),
-        "overlap_lengths_all_axes": lambda relations: relations.overlap_lengths_all_axes(),
-        "tangential_overlap_lengths": lambda relations: relations.tangential_overlap_lengths(AABBFace.Z_MIN),
-        "projected_overlap_mask": lambda relations: relations.projected_overlap_mask(AABBFace.X_MIN),
-        "inward_projected_overlap_mask": lambda relations: relations.inward_projected_overlap_mask(
-            AABBFace.Y_MAX, inset=0.01
-        ),
-        "inward_axis_overlap_all_axes": lambda relations: relations.inward_axis_overlap_all_axes(inset=0.01),
-        "projected_overlap_areas": lambda relations: relations.projected_overlap_areas(AABBFace.Z_MIN),
-        "query_face_areas": lambda relations: relations.query_face_areas(AABBFace.Z_MIN),
-        "projected_intersection_bounds": lambda relations: relations.projected_intersection_bounds(AABBFace.Z_MIN),
-        "within_distance": lambda relations: relations.within_distance(
-            AABBFace.X_MAX, minimum_distance=-0.01, maximum_distance=0.01
-        ),
-        "contact_mask": lambda relations: relations.contact_mask(AABBFace.Z_MIN, distance_tolerance=0.01),
-    }
-
-    for method_name, call_method in method_calls.items():
-        expected = np.stack(
-            [
-                np.stack(
-                    [
-                        call_method(
-                            PairwiseAABBRelations.from_aabbs(
-                                reference_aabbs=reference_aabbs[environment_index, world_index],
-                                query_aabbs=query_aabbs[environment_index, world_index],
-                            )
-                        )
-                        for world_index in range(reference_aabbs.shape[1])
-                    ],
-                    axis=0,
-                )
-                for environment_index in range(reference_aabbs.shape[0])
-            ],
-            axis=0,
+    for face_index, face in enumerate(AABBFace):
+        torch.testing.assert_close(
+            aabb.signed_distances(query_aabbs, reference_aabbs, face), expected[:, face_index].unsqueeze(0)
         )
-        np.testing.assert_array_equal(call_method(batched), expected, err_msg=method_name)
 
 
-def test_rank_four_query_thresholds_align_with_environment_world_and_query() -> None:
-    """Apply each batched threshold only to its aligned query row."""
-    reference_aabbs = np.array([[[[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]], [[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]]]], dtype=np.float64)
-    query_aabbs = np.array(
+def test_intersections_overlaps_and_containment_preserve_raw_bounds() -> None:
+    """Keep inverted intersection intervals while clamping overlap lengths."""
+    query_aabbs = torch.tensor([[0.0, 0.0, 0.0, 10.0, 10.0, 10.0]], dtype=torch.float64)
+    reference_aabbs = torch.tensor(
+        [[4.0, 3.0, 3.0, 5.0, 7.0, 7.0], [8.0, 8.0, 8.0, 12.0, 12.0, 12.0], [5.0, 3.0, 3.0, 5.0, 7.0, 7.0]],
+        dtype=torch.float64,
+    )
+
+    expected_bounds = torch.tensor(
         [
             [
-                [[1.0, 0.0, 0.0, 2.0, 1.0, 1.0], [1.2, 0.0, 0.0, 2.2, 1.0, 1.0]],
-                [[1.2, 0.0, 0.0, 2.2, 1.0, 1.0], [1.4, 0.0, 0.0, 2.4, 1.0, 1.0]],
+                [[4.0, 5.0], [3.0, 7.0], [3.0, 7.0]],
+                [[8.0, 10.0], [8.0, 10.0], [8.0, 10.0]],
+                [[5.0, 5.0], [3.0, 7.0], [3.0, 7.0]],
             ]
         ],
-        dtype=np.float64,
+        dtype=torch.float64,
     )
-    maximum_distances = np.array([[[0.0, 0.1], [0.25, 0.5]]], dtype=np.float64)
-    relations = PairwiseAABBRelations.from_aabbs(reference_aabbs=reference_aabbs, query_aabbs=query_aabbs)
-    expected = np.array([[[[True], [False]], [[True], [True]]]], dtype=bool)
+    torch.testing.assert_close(aabb.intersection_bounds_all_axes(query_aabbs, reference_aabbs), expected_bounds)
+    torch.testing.assert_close(
+        aabb.intersection_bounds(query_aabbs, reference_aabbs, AABBAxis.X), expected_bounds[..., 0, :]
+    )
+    torch.testing.assert_close(
+        aabb.overlap_lengths_all_axes(query_aabbs, reference_aabbs),
+        torch.tensor([[[1.0, 4.0, 4.0], [2.0, 2.0, 2.0], [0.0, 4.0, 4.0]]], dtype=torch.float64),
+    )
+    torch.testing.assert_close(
+        aabb.overlap_lengths(query_aabbs, reference_aabbs, AABBAxis.X),
+        torch.tensor([[1.0, 2.0, 0.0]], dtype=torch.float64),
+    )
+    torch.testing.assert_close(
+        aabb.tangential_overlap_lengths(query_aabbs, reference_aabbs, AABBFace.Z_MIN),
+        torch.tensor([[[1.0, 4.0], [2.0, 2.0], [0.0, 4.0]]], dtype=torch.float64),
+    )
+    torch.testing.assert_close(
+        aabb.projected_intersection_bounds(query_aabbs, reference_aabbs, AABBFace.Z_MIN),
+        torch.tensor([[[4.0, 3.0, 5.0, 7.0], [8.0, 8.0, 10.0, 10.0], [5.0, 3.0, 5.0, 7.0]]], dtype=torch.float64),
+    )
+    torch.testing.assert_close(
+        aabb.projected_overlap_areas(query_aabbs, reference_aabbs, AABBFace.Z_MIN),
+        torch.tensor([[4.0, 4.0, 0.0]], dtype=torch.float64),
+    )
+    assert torch.equal(aabb.axis_overlap(query_aabbs, reference_aabbs, AABBAxis.X), torch.tensor([[True, True, False]]))
+    assert torch.equal(
+        aabb.axis_overlap_all_axes(query_aabbs, reference_aabbs),
+        torch.tensor([[[True, True, True], [True, True, True], [False, True, True]]]),
+    )
+    assert torch.equal(aabb.contained_by_mask(query_aabbs, reference_aabbs), torch.tensor([[False, False, False]]))
+    torch.testing.assert_close(
+        aabb.query_face_areas(query_aabbs, AABBFace.Z_MIN), torch.tensor([100.0], dtype=torch.float64)
+    )
 
-    np.testing.assert_array_equal(
-        relations.within_distance(
-            AABBFace.X_MIN, minimum_distance=np.zeros((1, 2, 2), dtype=np.float64), maximum_distance=maximum_distances
+
+def test_projected_inward_and_contact_masks_keep_strict_and_inclusive_rules() -> None:
+    """Separate positive overlap, inward crossing, distance, and patch rules."""
+    query_aabbs = torch.tensor([[0.0, 0.0, 10.0, 10.0, 10.0, 11.0]], dtype=torch.float64)
+    reference_aabbs = torch.tensor(
+        [[4.0, 3.0, 0.0, 5.0, 7.0, 1.0], [8.0, 8.0, 0.0, 12.0, 12.0, 1.0], [5.0, 3.0, 0.0, 5.0, 7.0, 1.0]],
+        dtype=torch.float64,
+    )
+    assert torch.equal(
+        aabb.projected_overlap_mask(query_aabbs, reference_aabbs, AABBFace.Z_MIN), torch.tensor([[True, True, False]])
+    )
+    assert torch.equal(
+        aabb.projected_overlap_mask(query_aabbs, reference_aabbs, AABBFace.Z_MIN, minimum_face_crossing=2.0),
+        torch.tensor([[False, True, False]]),
+    )
+
+    inward_query = torch.tensor([[0.0, 0.0, 0.0, 10.0, 10.0, 10.0]], dtype=torch.float64)
+    inward_reference = torch.tensor(
+        [
+            [0.0, 2.0, 2.0, 1.0, 3.0, 3.0],
+            [2.0, 0.0, 2.0, 3.0, 1.0, 3.0],
+            [2.0, 2.0, 0.0, 3.0, 3.0, 1.0],
+            [4.0, 4.0, 4.0, 5.0, 5.0, 5.0],
+        ],
+        dtype=torch.float64,
+    )
+    torch.testing.assert_close(
+        aabb.inward_axis_overlap_all_axes(inward_query, inward_reference, inset=1.0),
+        torch.tensor([[[False, True, True], [True, False, True], [True, True, False], [True, True, True]]]),
+    )
+    assert torch.equal(
+        aabb.inward_projected_overlap_mask(inward_query, inward_reference, AABBFace.Z_MIN, inset=1.0),
+        torch.tensor([[False, False, True, True]]),
+    )
+
+    contact_query = torch.tensor([[0.0, 0.0, 0.0, 2.0, 2.0, 1.0]], dtype=torch.float64)
+    contact_reference = torch.tensor(
+        [[0.0, 0.0, 1.0, 2.0, 2.0, 2.0], [0.0, 0.0, 1.1, 2.0, 2.0, 2.0], [0.0, 1.5, 1.0, 2.0, 2.5, 2.0]],
+        dtype=torch.float64,
+    )
+    assert torch.equal(
+        aabb.within_distance(
+            contact_query, contact_reference, AABBFace.Z_MAX, minimum_distance=0.0, maximum_distance=0.1
+        ),
+        torch.tensor([[True, False, True]]),
+    )
+    assert torch.equal(
+        aabb.contact_mask(
+            contact_query, contact_reference, AABBFace.Z_MAX, distance_tolerance=0.1, minimum_patch_lengths=(2.0, 1.0)
+        ),
+        torch.tensor([[True, False, False]]),
+    )
+
+
+def test_query_face_contact_patches_cover_all_oriented_faces() -> None:
+    """Represent exact contact on each oriented query face as a degenerate AABB."""
+    query_aabbs = torch.tensor([[0.0, 0.0, 0.0, 2.0, 3.0, 4.0]], dtype=torch.float64)
+    reference_aabbs = torch.tensor(
+        [
+            [-1.0, 0.5, 1.0, 0.0, 2.5, 3.0],
+            [2.0, 0.5, 1.0, 3.0, 2.5, 3.0],
+            [0.5, -1.0, 1.0, 1.5, 0.0, 3.0],
+            [0.5, 3.0, 1.0, 1.5, 4.0, 3.0],
+            [0.5, 0.5, -1.0, 1.5, 2.5, 0.0],
+            [0.5, 0.5, 4.0, 1.5, 2.5, 5.0],
+        ],
+        dtype=torch.float64,
+    )
+    expected = torch.tensor(
+        [
+            [0.0, 0.5, 1.0, 0.0, 2.5, 3.0],
+            [2.0, 0.5, 1.0, 2.0, 2.5, 3.0],
+            [0.5, 0.0, 1.0, 1.5, 0.0, 3.0],
+            [0.5, 3.0, 1.0, 1.5, 3.0, 3.0],
+            [0.5, 0.5, 0.0, 1.5, 2.5, 0.0],
+            [0.5, 0.5, 4.0, 1.5, 2.5, 4.0],
+        ],
+        dtype=torch.float64,
+    )
+
+    patches, face_contact_mask = aabb.query_face_contact_patches(query_aabbs, reference_aabbs, distance_tolerance=0.0)
+    assert patches.shape == (1, 6, 6, 6)
+    assert torch.equal(face_contact_mask, torch.eye(6, dtype=torch.bool).unsqueeze(0))
+    for face_index, expected_patch in enumerate(expected):
+        expected_faces = torch.zeros((6, 6), dtype=torch.float64)
+        expected_faces[face_index] = expected_patch
+        torch.testing.assert_close(patches[0, face_index], expected_faces)
+
+
+@pytest.mark.parametrize("reference_maximum, expected_valid", [(-0.2, True), (0.0, True), (0.2, True), (-0.21, False)])
+def test_query_face_contact_patches_accept_symmetric_normal_tolerance(
+    reference_maximum: float, expected_valid: bool
+) -> None:
+    """Accept equal, gapped, and crossed faces within absolute distance tolerance."""
+    query_aabbs = torch.tensor([[0.0, 0.0, 0.0, 2.0, 2.0, 2.0]], dtype=torch.float64)
+    reference_aabbs = torch.tensor(
+        [[0.0, 0.0, reference_maximum - 1.0, 2.0, 2.0, reference_maximum]], dtype=torch.float64
+    )
+
+    patches, face_contact_mask = aabb.query_face_contact_patches(query_aabbs, reference_aabbs, distance_tolerance=0.2)
+    expected = torch.zeros((1, 1, 6, 6), dtype=torch.float64)
+    expected_mask = torch.zeros((1, 1, 6), dtype=torch.bool)
+    if expected_valid:
+        expected[0, 0, 4] = torch.tensor([0.0, 0.0, 0.0, 2.0, 2.0, 0.0], dtype=torch.float64)
+        expected_mask[0, 0, 4] = True
+    torch.testing.assert_close(patches, expected)
+    assert torch.equal(face_contact_mask, expected_mask)
+
+
+def test_query_face_contact_patches_require_normal_and_tangential_thresholds() -> None:
+    """Reject distance misses, edge contacts, and either insufficient tangential overlap."""
+    query_aabbs = torch.tensor([[0.0, 0.0, 0.0, 2.0, 2.0, 2.0]], dtype=torch.float64)
+    reference_aabbs = torch.tensor(
+        [
+            [0.0, 0.0, -1.21, 2.0, 2.0, -0.21],
+            [2.0, 0.0, -1.0, 3.0, 2.0, 0.0],
+            [0.0, 2.0, -1.0, 2.0, 3.0, 0.0],
+            [0.0, 0.0, -1.0, 0.5, 2.0, 0.0],
+            [0.0, 0.0, -1.0, 2.0, 0.5, 0.0],
+            [2.0, 2.0, -1.0, 3.0, 3.0, 0.0],
+        ],
+        dtype=torch.float64,
+    )
+    patches, face_contact_mask = aabb.query_face_contact_patches(
+        query_aabbs, reference_aabbs, distance_tolerance=0.2, minimum_face_crossing=1.0
+    )
+    torch.testing.assert_close(patches, torch.zeros((1, 6, 6, 6), dtype=torch.float64))
+    assert not face_contact_mask.any()
+
+    threshold_reference = torch.tensor([[0.0, 0.0, -1.0, 1.0, 1.0, 0.0]], dtype=torch.float64)
+    threshold_patch, threshold_mask = aabb.query_face_contact_patches(
+        query_aabbs, threshold_reference, distance_tolerance=0.0, minimum_face_crossing=1.0
+    )
+    expected_threshold_patch = torch.zeros((1, 1, 6, 6), dtype=torch.float64)
+    expected_threshold_patch[0, 0, 4] = torch.tensor([0.0, 0.0, 0.0, 1.0, 1.0, 0.0], dtype=torch.float64)
+    torch.testing.assert_close(threshold_patch, expected_threshold_patch)
+    assert torch.equal(threshold_mask, torch.tensor([[[False, False, False, False, True, False]]]))
+
+
+def test_query_face_contact_patches_preserve_every_qualifying_face() -> None:
+    """Keep simultaneous contacts instead of selecting one face per pair."""
+    query_aabbs = torch.tensor([[0.0, 0.0, 0.0, 2.0, 10.0, 10.0]], dtype=torch.float64)
+    reference_aabbs = torch.tensor(
+        [[0.4, 0.0, 0.0, 1.5, 10.0, 10.0], [0.5, 0.0, 0.0, 1.5, 10.0, 10.0]], dtype=torch.float64
+    )
+    patches, face_contact_mask = aabb.query_face_contact_patches(query_aabbs, reference_aabbs, distance_tolerance=2.0)
+    expected = torch.zeros((1, 2, 6, 6), dtype=torch.float64)
+    expected[:, :, 0] = torch.tensor([0.0, 0.0, 0.0, 0.0, 10.0, 10.0], dtype=torch.float64)
+    expected[:, :, 1] = torch.tensor([2.0, 0.0, 0.0, 2.0, 10.0, 10.0], dtype=torch.float64)
+    torch.testing.assert_close(patches, expected)
+    assert torch.equal(face_contact_mask, torch.tensor([[[True, True, False, False, False, False]] * 2]))
+
+
+def test_query_face_contact_patches_keep_degenerate_queries_and_self_pairs() -> None:
+    """Keep query-face coordinates for degenerate queries without self exclusion."""
+    degenerate_query = torch.tensor([[0.0, 0.0, 1.0, 2.0, 2.0, 1.0]], dtype=torch.float64)
+    reference_aabbs = torch.tensor([[0.0, 0.0, 0.0, 2.0, 2.0, 1.0]], dtype=torch.float64)
+    patch, face_contact_mask = aabb.query_face_contact_patches(
+        degenerate_query, reference_aabbs, distance_tolerance=0.0
+    )
+    expected_patch = torch.zeros((1, 1, 6, 6), dtype=torch.float64)
+    expected_patch[0, 0, 4] = torch.tensor([0.0, 0.0, 1.0, 2.0, 2.0, 1.0], dtype=torch.float64)
+    torch.testing.assert_close(patch, expected_patch)
+    assert torch.equal(face_contact_mask, torch.tensor([[[False, False, False, False, True, False]]]))
+
+    self_aabb = torch.tensor([[0.0, 0.0, 0.0, 2.0, 2.0, 2.0]], dtype=torch.float64)
+    self_patch, self_mask = aabb.query_face_contact_patches(self_aabb, self_aabb, distance_tolerance=2.0)
+    torch.testing.assert_close(
+        self_patch,
+        torch.tensor(
+            [
+                [
+                    [
+                        [0.0, 0.0, 0.0, 0.0, 2.0, 2.0],
+                        [2.0, 0.0, 0.0, 2.0, 2.0, 2.0],
+                        [0.0, 0.0, 0.0, 2.0, 0.0, 2.0],
+                        [0.0, 2.0, 0.0, 2.0, 2.0, 2.0],
+                        [0.0, 0.0, 0.0, 2.0, 2.0, 0.0],
+                        [0.0, 0.0, 2.0, 2.0, 2.0, 2.0],
+                    ]
+                ]
+            ],
+            dtype=torch.float64,
+        ),
+    )
+    assert torch.equal(self_mask, torch.ones((1, 1, 6), dtype=torch.bool))
+
+
+def test_query_face_contact_patches_broadcast_thresholds_and_empty_dimensions() -> None:
+    """Broadcast scalar and per-query thresholds while retaining natural empty shapes."""
+    query_aabbs = torch.tensor([[0.0, 0.0, 0.0, 2.0, 2.0, 2.0], [0.0, 0.0, 0.0, 2.0, 2.0, 2.0]], dtype=torch.float64)
+    reference_aabbs = torch.tensor(
+        [[0.0, 0.0, -1.1, 2.0, 2.0, -0.1], [0.0, 0.0, -1.3, 2.0, 2.0, -0.3]], dtype=torch.float64
+    )
+    per_query_patches, per_query_mask = aabb.query_face_contact_patches(
+        query_aabbs,
+        reference_aabbs,
+        distance_tolerance=torch.tensor([0.1, 0.2], dtype=torch.float64),
+        minimum_face_crossing=torch.tensor([2.0, 3.0], dtype=torch.float64),
+    )
+    expected_per_query = torch.zeros((2, 2, 6, 6), dtype=torch.float64)
+    expected_per_query[0, 0, 4] = torch.tensor([0.0, 0.0, 0.0, 2.0, 2.0, 0.0], dtype=torch.float64)
+    torch.testing.assert_close(per_query_patches, expected_per_query)
+    expected_per_query_mask = torch.zeros((2, 2, 6), dtype=torch.bool)
+    expected_per_query_mask[0, 0, 4] = True
+    assert torch.equal(per_query_mask, expected_per_query_mask)
+
+    scalar_patches, scalar_mask = aabb.query_face_contact_patches(query_aabbs, reference_aabbs, distance_tolerance=0.1)
+    expected_scalar = torch.zeros((2, 2, 6, 6), dtype=torch.float64)
+    expected_scalar[:, 0, 4] = torch.tensor([0.0, 0.0, 0.0, 2.0, 2.0, 0.0], dtype=torch.float64)
+    torch.testing.assert_close(scalar_patches, expected_scalar)
+    expected_scalar_mask = torch.zeros((2, 2, 6), dtype=torch.bool)
+    expected_scalar_mask[:, 0, 4] = True
+    assert torch.equal(scalar_mask, expected_scalar_mask)
+
+    empty_query = torch.empty((0, 6), dtype=torch.float64)
+    empty_reference = torch.empty((0, 6), dtype=torch.float64)
+    empty_query_patches, empty_query_mask = aabb.query_face_contact_patches(
+        empty_query, reference_aabbs[:1], distance_tolerance=0.0
+    )
+    assert empty_query_patches.shape == (0, 1, 6, 6)
+    assert empty_query_mask.shape == (0, 1, 6)
+    empty_reference_patches, empty_reference_mask = aabb.query_face_contact_patches(
+        query_aabbs[:1], empty_reference, distance_tolerance=0.0
+    )
+    assert empty_reference_patches.shape == (1, 0, 6, 6)
+    assert empty_reference_mask.shape == (1, 0, 6)
+
+
+def test_contact_tuple_patch_threshold_keeps_float64_boundary_precision() -> None:
+    """Do not round Python patch thresholds to float32 at the comparison boundary."""
+    query_aabbs = torch.tensor([[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]], dtype=torch.float32)
+    reference_aabbs = torch.tensor([[0.0, 0.0, 1.0, 1.0, 0.10000000149011612, 2.0]], dtype=torch.float32)
+
+    assert not aabb.contact_mask(
+        query_aabbs, reference_aabbs, AABBFace.Z_MAX, distance_tolerance=0.0, minimum_patch_lengths=(1.0, 0.100000002)
+    ).item()
+
+
+def test_broadcasted_batches_match_independent_world_calls() -> None:
+    """Broadcast independent batch axes without materializing input copies."""
+    query_aabbs = torch.tensor(
+        [
+            [[[0.0, 0.0, 0.0, 2.0, 2.0, 2.0], [1.0, 1.0, 1.0, 3.0, 3.0, 3.0]]],
+            [[[5.0, 0.0, 0.0, 7.0, 2.0, 2.0], [6.0, 1.0, 1.0, 8.0, 3.0, 3.0]]],
+        ],
+        dtype=torch.float64,
+    )
+    reference_aabbs = torch.tensor(
+        [
+            [
+                [[0.0, 0.0, 0.0, 1.0, 1.0, 1.0], [2.0, 2.0, 2.0, 4.0, 4.0, 4.0]],
+                [[0.0, 0.0, 0.0, 2.0, 2.0, 2.0], [4.0, 4.0, 4.0, 6.0, 6.0, 6.0]],
+                [[1.0, 1.0, 1.0, 3.0, 3.0, 3.0], [7.0, 7.0, 7.0, 8.0, 8.0, 8.0]],
+            ]
+        ],
+        dtype=torch.float64,
+    )
+    assert query_aabbs.shape == (2, 1, 2, 6)
+    assert reference_aabbs.shape == (1, 3, 2, 6)
+    output = aabb.overlap_lengths_all_axes(query_aabbs, reference_aabbs)
+    assert output.shape == (2, 3, 2, 2, 3)
+    for environment_index in range(2):
+        for world_index in range(3):
+            expected = aabb.overlap_lengths_all_axes(query_aabbs[environment_index, 0], reference_aabbs[0, world_index])
+            torch.testing.assert_close(output[environment_index, world_index], expected)
+
+    distances = aabb.signed_distances(query_aabbs, reference_aabbs, AABBFace.Z_MIN)
+    assert distances.shape == (2, 3, 2, 2)
+    distance_tolerances = torch.tensor([[[0.0, 0.5]], [[1.0, 1.5]]], dtype=torch.float64)
+    minimum_crossings = torch.tensor([[[0.0, 0.5]], [[1.0, 1.5]]], dtype=torch.float64)
+    patches, face_contact_mask = aabb.query_face_contact_patches(
+        query_aabbs, reference_aabbs, distance_tolerance=distance_tolerances, minimum_face_crossing=minimum_crossings
+    )
+    assert patches.shape == (2, 3, 2, 2, 6, 6)
+    assert face_contact_mask.shape == (2, 3, 2, 2, 6)
+    for environment_index in range(2):
+        for world_index in range(3):
+            expected_patches, expected_mask = aabb.query_face_contact_patches(
+                query_aabbs[environment_index, 0],
+                reference_aabbs[0, world_index],
+                distance_tolerance=distance_tolerances[environment_index, 0],
+                minimum_face_crossing=minimum_crossings[environment_index, 0],
+            )
+            torch.testing.assert_close(patches[environment_index, world_index], expected_patches)
+            assert torch.equal(face_contact_mask[environment_index, world_index], expected_mask)
+
+
+def test_thresholds_accept_python_scalar_scalar_tensor_and_per_query_tensor() -> None:
+    """Broadcast scalar and query-aligned thresholds across reference rows."""
+    query_aabbs = torch.tensor(
+        [
+            [[[1.0, 0.0, 0.0, 2.0, 1.0, 1.0], [1.2, 0.0, 0.0, 2.2, 1.0, 1.0]]],
+            [[[1.2, 0.0, 0.0, 2.2, 1.0, 1.0], [1.4, 0.0, 0.0, 2.4, 1.0, 1.0]]],
+        ],
+        dtype=torch.float64,
+    )
+    reference_aabbs = torch.tensor(
+        [[[[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]], [[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]]]], dtype=torch.float64
+    )
+    maximum_distances = torch.tensor([[[0.0, 0.1]], [[0.25, 0.5]]], dtype=torch.float64)
+    expected = torch.tensor([[[[True], [False]], [[True], [False]]], [[[True], [True]], [[True], [True]]]])
+
+    for maximum_distance in (0.5, torch.tensor(0.5, dtype=torch.float64)):
+        result = aabb.within_distance(
+            query_aabbs, reference_aabbs, AABBFace.X_MIN, minimum_distance=0.0, maximum_distance=maximum_distance
+        )
+        assert result.shape == (2, 2, 2, 1)
+    assert torch.equal(
+        aabb.within_distance(
+            query_aabbs,
+            reference_aabbs,
+            AABBFace.X_MIN,
+            minimum_distance=torch.zeros(2, 1, 2, dtype=torch.float64),
+            maximum_distance=maximum_distances,
         ),
         expected,
     )
-    np.testing.assert_array_equal(
-        relations.contact_mask(AABBFace.X_MIN, distance_tolerance=maximum_distances), expected
+    assert torch.equal(
+        aabb.contact_mask(query_aabbs, reference_aabbs, AABBFace.X_MIN, distance_tolerance=maximum_distances), expected
     )
-    with pytest.raises(ValueError, match=r"shape \(1, 2, 2\)"):
-        relations.contact_mask(AABBFace.X_MIN, distance_tolerance=np.zeros((2,), dtype=np.float64))
-
-
-def test_rank_four_inputs_reject_implicit_environment_or_world_broadcasting() -> None:
-    """Require query and reference tensors to name the same explicit worlds."""
-    query_aabbs = np.zeros((2, 3, 1, 6), dtype=np.float64)
-
-    with pytest.raises(ValueError, match="matching environment and world dimensions"):
-        PairwiseAABBRelations.from_aabbs(
-            reference_aabbs=np.zeros((2, 1, 1, 6), dtype=np.float64), query_aabbs=query_aabbs
-        )
-
-    with pytest.raises(ValueError, match="same rank"):
-        PairwiseAABBRelations.from_aabbs(reference_aabbs=np.zeros((1, 6), dtype=np.float64), query_aabbs=query_aabbs)
-
-
-def test_projected_overlap_mask_checks_only_axes_in_selected_face() -> None:
-    """Show that a Z-face projection checks X and Y but ignores Z distance."""
-    reference_aabbs = np.array(
-        [
-            [0.0, 0.0, 0.0, 2.0, 2.0, 1.0],  # Overlaps query in X and Y.
-            [3.0, 1.0, 0.0, 4.0, 2.0, 1.0],  # Only touches at query x=3.
-            [1.0, 4.0, 0.0, 2.0, 5.0, 1.0],  # Separated along Y.
-        ],
-        dtype=np.float64,
+    assert torch.equal(
+        aabb.projected_overlap_mask(
+            query_aabbs,
+            reference_aabbs,
+            AABBFace.X_MIN,
+            minimum_face_crossing=torch.tensor([[[0.5, 1.1]], [[0.5, 1.1]]], dtype=torch.float64),
+        ),
+        torch.tensor([[[[True], [False]], [[True], [False]]], [[[True], [False]], [[True], [False]]]]),
     )
-    query_aabbs = np.array([[1.0, 1.0, 10.0, 3.0, 3.0, 11.0]], dtype=np.float64)
-
-    relations = PairwiseAABBRelations.from_aabbs(reference_aabbs=reference_aabbs, query_aabbs=query_aabbs)
-
-    z_min_overlap_mask = relations.projected_overlap_mask(AABBFace.Z_MIN, minimum_face_crossing=0.0)
-    z_max_overlap_mask = relations.projected_overlap_mask(AABBFace.Z_MAX, minimum_face_crossing=0.0)
-
-    expected_overlap_mask = np.array([[True, False, False]])
-
-    np.testing.assert_array_equal(z_min_overlap_mask, expected_overlap_mask)
-    np.testing.assert_array_equal(z_max_overlap_mask, expected_overlap_mask)
-
-
-def test_axis_overlap_compares_actual_length_with_inclusive_threshold() -> None:
-    """Require positive actual overlap and accept equality with the threshold."""
-    query_aabbs = np.array([[0.0, 0.0, 0.0, 10.0, 2.0, 2.0]], dtype=np.float64)
-    reference_aabbs = np.array(
-        [
-            [4.0, 0.0, 0.0, 5.0, 2.0, 2.0],  # Contained with X overlap 1.
-            [8.0, 0.0, 0.0, 12.0, 2.0, 2.0],  # Partial X overlap 2.
-            [5.0, 0.0, 0.0, 5.0, 2.0, 2.0],  # Contained with zero X length.
-            [10.0, 0.0, 0.0, 11.0, 2.0, 2.0],  # Touches at query x=10.
-        ],
-        dtype=np.float64,
+    assert aabb.axis_overlap_all_axes(
+        query_aabbs, reference_aabbs, minimum_face_crossing=torch.zeros(2, 1, 2, dtype=torch.float64)
+    ).shape == torch.Size([2, 2, 2, 1, 3])
+    patch_thresholds = torch.tensor([[[[0.9, 0.9], [0.1, 0.1]]], [[[0.9, 0.9], [0.1, 0.1]]]], dtype=torch.float64)
+    patch_result = aabb.contact_mask(
+        query_aabbs,
+        reference_aabbs,
+        AABBFace.X_MIN,
+        distance_tolerance=maximum_distances,
+        minimum_patch_lengths=patch_thresholds,
     )
-    relations = PairwiseAABBRelations.from_aabbs(reference_aabbs=reference_aabbs, query_aabbs=query_aabbs)
-
-    default_overlap = relations.axis_overlap(AABBAxis.X)
-    threshold_overlap = relations.axis_overlap(AABBAxis.X, minimum_face_crossing=2.0)
-
-    np.testing.assert_array_equal(default_overlap, np.array([[True, True, False, False]]))
-    np.testing.assert_array_equal(threshold_overlap, np.array([[False, True, False, False]]))
+    assert patch_result.shape == (2, 2, 2, 1)
 
 
-def test_axis_overlap_all_axes_compares_each_actual_length() -> None:
-    """Apply the inclusive overlap threshold independently on X, Y, and Z."""
-    query_aabbs = np.array([[0.0, 0.0, 0.0, 10.0, 10.0, 10.0]], dtype=np.float64)
-    reference_aabbs = np.array(
-        [
-            [4.0, 3.0, 3.0, 5.0, 7.0, 7.0],  # Overlap lengths 1, 4, 4.
-            [8.0, 8.0, 8.0, 12.0, 12.0, 12.0],  # Overlap lengths 2, 2, 2.
-            [5.0, 3.0, 3.0, 5.0, 7.0, 7.0],  # Overlap lengths 0, 4, 4.
-        ],
-        dtype=np.float64,
+def test_empty_degenerate_and_self_relations_keep_natural_shapes() -> None:
+    """Support empty collections, zero-length axes, and diagonal self-relations."""
+    one_aabb = torch.tensor([[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]], dtype=torch.float64)
+    empty_aabbs = torch.empty((0, 6), dtype=torch.float64)
+    empty_query = aabb.contact_mask(empty_aabbs, one_aabb, AABBFace.X_MIN, distance_tolerance=0.1)
+    empty_reference = aabb.contact_mask(one_aabb, empty_aabbs, AABBFace.X_MIN, distance_tolerance=0.1)
+    assert empty_query.shape == (0, 1)
+    assert empty_reference.shape == (1, 0)
+    assert aabb.intersection_bounds_all_axes(empty_aabbs, empty_aabbs).shape == (0, 0, 3, 2)
+
+    degenerate = torch.tensor([[1.0, 1.0, 1.0, 1.0, 2.0, 3.0]], dtype=torch.float64)
+    assert torch.equal(aabb.axis_overlap_all_axes(degenerate, degenerate), torch.tensor([[[False, True, True]]]))
+    assert torch.equal(torch.diag(aabb.contained_by_mask(degenerate, degenerate)), torch.ones(1, dtype=torch.bool))
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_float_dtypes_noncontiguous_inputs_and_input_preservation(dtype: torch.dtype) -> None:
+    """Keep dtype, views, and source storage behavior ordinary for Torch."""
+    source = torch.tensor(
+        [[0.0, 0.0, 0.0, 2.0, 2.0, 2.0], [1.0, 1.0, 1.0, 3.0, 3.0, 3.0], [3.0, 3.0, 3.0, 4.0, 4.0, 4.0]],
+        dtype=dtype,
+        device="cpu",
     )
-    relations = PairwiseAABBRelations.from_aabbs(reference_aabbs=reference_aabbs, query_aabbs=query_aabbs)
-
-    actual_overlap = relations.axis_overlap_all_axes(minimum_face_crossing=2.0)
-
-    expected_overlap = np.array([[[False, True, True], [True, True, True], [False, True, True]]])
-    np.testing.assert_array_equal(actual_overlap, expected_overlap)
-
-
-def test_projected_overlap_mask_compares_both_actual_lengths() -> None:
-    """Require positive actual overlap on both axes in the selected face."""
-    query_aabbs = np.array([[0.0, 0.0, 10.0, 10.0, 10.0, 11.0]], dtype=np.float64)
-    reference_aabbs = np.array(
-        [
-            [4.0, 3.0, 0.0, 5.0, 7.0, 1.0],  # Tangential lengths 1, 4.
-            [8.0, 8.0, 0.0, 12.0, 12.0, 1.0],  # Tangential lengths 2, 2.
-            [5.0, 3.0, 0.0, 5.0, 7.0, 1.0],  # Tangential lengths 0, 4.
-        ],
-        dtype=np.float64,
-    )
-    relations = PairwiseAABBRelations.from_aabbs(reference_aabbs=reference_aabbs, query_aabbs=query_aabbs)
-
-    default_overlap = relations.projected_overlap_mask(AABBFace.Z_MIN)
-    threshold_overlap = relations.projected_overlap_mask(AABBFace.Z_MIN, minimum_face_crossing=2.0)
-
-    np.testing.assert_array_equal(default_overlap, np.array([[True, True, False]]))
-    np.testing.assert_array_equal(threshold_overlap, np.array([[False, True, False]]))
-
-
-def test_inward_projected_overlap_mask_uses_selected_face_axes() -> None:
-    """Use the same tangential axes for both opposite faces."""
-    query_aabbs = np.array([[0.0, 0.0, 0.0, 10.0, 10.0, 10.0]], dtype=np.float64)
-    reference_aabbs = np.array(
-        [
-            [9.0, 2.0, 2.0, 10.0, 3.0, 3.0],  # Crosses only the YZ inward projection.
-            [2.0, 9.0, 2.0, 3.0, 10.0, 3.0],  # Crosses only the XZ inward projection.
-            [2.0, 2.0, 9.0, 3.0, 3.0, 10.0],  # Crosses only the XY inward projection.
-        ],
-        dtype=np.float64,
-    )
-    relations = PairwiseAABBRelations.from_aabbs(reference_aabbs=reference_aabbs, query_aabbs=query_aabbs)
-    expected_by_face = {
-        AABBFace.X_MIN: np.array([[True, False, False]]),
-        AABBFace.X_MAX: np.array([[True, False, False]]),
-        AABBFace.Y_MIN: np.array([[False, True, False]]),
-        AABBFace.Y_MAX: np.array([[False, True, False]]),
-        AABBFace.Z_MIN: np.array([[False, False, True]]),
-        AABBFace.Z_MAX: np.array([[False, False, True]]),
-    }
-
-    for face, expected in expected_by_face.items():
-        np.testing.assert_array_equal(relations.inward_projected_overlap_mask(face, inset=1.0), expected)
-
-
-def test_inward_axis_overlap_all_axes_returns_xyz_masks() -> None:
-    """Return strict inward-boundary crossings for X, Y, and Z together."""
-    query_aabbs = np.array([[0.0, 0.0, 0.0, 10.0, 10.0, 10.0]], dtype=np.float64)
-    reference_aabbs = np.array(
-        [
-            [0.0, 2.0, 2.0, 1.0, 3.0, 3.0],  # Equal to the inward X-min boundary.
-            [2.0, 0.0, 2.0, 3.0, 1.0, 3.0],  # Equal to the inward Y-min boundary.
-            [2.0, 2.0, 0.0, 3.0, 3.0, 1.0],  # Equal to the inward Z-min boundary.
-            [4.0, 4.0, 4.0, 5.0, 5.0, 5.0],  # Strictly crosses every inward interval.
-        ],
-        dtype=np.float64,
-    )
-    relations = PairwiseAABBRelations.from_aabbs(reference_aabbs=reference_aabbs, query_aabbs=query_aabbs)
-
-    np.testing.assert_array_equal(
-        relations.inward_axis_overlap_all_axes(inset=1.0),
-        np.array([[[False, True, True], [True, False, True], [True, True, False], [True, True, True]]]),
-    )
-
-
-def test_inward_projected_overlap_mask_rejects_boundary_equality() -> None:
-    """Require strict crossing of both inward query boundaries."""
-    query_aabbs = np.array([[0.0, 0.0, 0.0, 10.0, 10.0, 10.0]], dtype=np.float64)
-    reference_aabbs = np.array(
-        [
-            [0.0, 2.0, 0.0, 1.0, 3.0, 1.0],  # x_max equals query x_min + inset.
-            [9.0, 2.0, 0.0, 10.0, 3.0, 1.0],  # x_min equals query x_max - inset.
-            [0.0, 2.0, 0.0, 1.0001, 3.0, 1.0],  # Crosses the lower inward boundary.
-            [8.9999, 2.0, 0.0, 10.0, 3.0, 1.0],  # Crosses the upper inward boundary.
-        ],
-        dtype=np.float64,
-    )
-    relations = PairwiseAABBRelations.from_aabbs(reference_aabbs=reference_aabbs, query_aabbs=query_aabbs)
-
-    actual = relations.inward_projected_overlap_mask(AABBFace.Z_MIN, inset=1.0)
-
-    np.testing.assert_array_equal(actual, np.array([[False, False, True, True]]))
-
-
-def test_inward_projected_overlap_mask_accepts_narrow_contained_reference() -> None:
-    """Test inward boundaries rather than a minimum overlap length."""
-    query_aabbs = np.array([[0.0, 0.0, 0.0, 10.0, 10.0, 10.0]], dtype=np.float64)
-    reference_aabbs = np.array([[4.0, 4.0, 20.0, 5.0, 5.0, 21.0]], dtype=np.float64)
-    relations = PairwiseAABBRelations.from_aabbs(reference_aabbs=reference_aabbs, query_aabbs=query_aabbs)
-
-    inward_overlap = relations.inward_projected_overlap_mask(AABBFace.Z_MIN, inset=2.0)
-    minimum_length_overlap = relations.projected_overlap_mask(AABBFace.Z_MIN, minimum_face_crossing=2.0)
-
-    np.testing.assert_array_equal(inward_overlap, np.array([[True]]))
-    np.testing.assert_array_equal(minimum_length_overlap, np.array([[False]]))
-
-
-def test_inward_projected_overlap_mask_preserves_empty_shapes() -> None:
-    """Return natural query-first shapes for empty batches."""
-    one_aabb = np.array([[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]], dtype=np.float64)
-    empty_aabbs = np.empty((0, 6), dtype=np.float64)
-
-    empty_query_relations = PairwiseAABBRelations.from_aabbs(reference_aabbs=one_aabb, query_aabbs=empty_aabbs)
-    empty_reference_relations = PairwiseAABBRelations.from_aabbs(reference_aabbs=empty_aabbs, query_aabbs=one_aabb)
-
-    np.testing.assert_array_equal(
-        empty_query_relations.inward_projected_overlap_mask(AABBFace.X_MIN, inset=0.1), np.empty((0, 1), dtype=bool)
-    )
-    np.testing.assert_array_equal(
-        empty_reference_relations.inward_projected_overlap_mask(AABBFace.X_MIN, inset=0.1), np.empty((1, 0), dtype=bool)
-    )
-    np.testing.assert_array_equal(
-        empty_query_relations.inward_axis_overlap_all_axes(inset=0.1), np.empty((0, 1, 3), dtype=bool)
-    )
-    np.testing.assert_array_equal(
-        empty_reference_relations.inward_axis_overlap_all_axes(inset=0.1), np.empty((1, 0, 3), dtype=bool)
-    )
-
-
-@pytest.mark.parametrize("inset", [-1.0, np.nan, np.inf])
-def test_inward_projected_overlap_mask_rejects_invalid_inset(inset: float) -> None:
-    """Reject negative and non-finite inward offsets."""
-    one_aabb = np.array([[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]], dtype=np.float64)
-    relations = PairwiseAABBRelations.from_aabbs(reference_aabbs=one_aabb, query_aabbs=one_aabb)
-
-    with pytest.raises(ValueError):
-        relations.inward_projected_overlap_mask(AABBFace.X_MIN, inset=inset)
-    with pytest.raises(ValueError):
-        relations.inward_axis_overlap_all_axes(inset=inset)
-
-
-def test_signed_distances_show_gap_alignment_and_crossing_for_min_face() -> None:
-    """Show that signed distance is positive, zero, or negative across a face."""
-    query_aabbs = np.array([[0.0, 0.0, 2.0, 2.0, 2.0, 4.0]], dtype=np.float64)
-    reference_aabbs = np.array(
-        [
-            [0.0, 0.0, 0.0, 2.0, 2.0, 1.0],  # Gap below the query.
-            [0.0, 0.0, 0.0, 2.0, 2.0, 2.0],  # Top aligns with query bottom.
-            [0.0, 0.0, 0.0, 2.0, 2.0, 3.0],  # Crosses the query bottom.
-        ],
-        dtype=np.float64,
-    )
-
-    relations = PairwiseAABBRelations.from_aabbs(reference_aabbs=reference_aabbs, query_aabbs=query_aabbs)
-
-    actual_distances = relations.signed_distances(AABBFace.Z_MIN)
-    expected_distances = np.array([[1.0, 0.0, -1.0]])
-
-    np.testing.assert_array_equal(actual_distances, expected_distances)
-
-
-def test_within_distance_selects_references_near_the_chosen_x_face() -> None:
-    """Show that opposite X faces select references on opposite sides."""
-    query_aabbs = np.array([[2.0, 0.0, 0.0, 4.0, 2.0, 2.0]], dtype=np.float64)
-    reference_aabbs = np.array(
-        [
-            [0.0, 0.0, 0.0, 1.0, 2.0, 2.0],  # One unit from X_MIN.
-            [5.0, 0.0, 0.0, 6.0, 2.0, 2.0],  # One unit from X_MAX.
-        ],
-        dtype=np.float64,
-    )
-
-    relations = PairwiseAABBRelations.from_aabbs(reference_aabbs=reference_aabbs, query_aabbs=query_aabbs)
-
-    x_min_mask = relations.within_distance(AABBFace.X_MIN, minimum_distance=0.0, maximum_distance=1.0)
-    x_max_mask = relations.within_distance(AABBFace.X_MAX, minimum_distance=0.0, maximum_distance=1.0)
-
-    expected_x_min_mask = np.array([[True, False]])
-    expected_x_max_mask = np.array([[False, True]])
-
-    np.testing.assert_array_equal(x_min_mask, expected_x_min_mask)
-    np.testing.assert_array_equal(x_max_mask, expected_x_max_mask)
-
-
-def test_contained_by_mask_is_query_first_inclusive_and_supports_empty_batches() -> None:
-    """Check inclusive containment orientation, self-comparisons, and empty shapes."""
-    reference_aabbs = np.array(
-        [
-            [0.0, 0.0, 0.0, 10.0, 20.0, 30.0],
-            [2.0, 3.0, 4.0, 5.0, 7.0, 8.0],
-            [0.0, 0.0, 0.0, 10.0, 20.0, 30.0],
-            [1.0, 2.0, 3.0, 9.0, 10.0, 11.0],
-        ],
-        dtype=np.float64,
-    )
-    query_aabbs = np.array(
-        [
-            [0.0, 0.0, 0.0, 10.0, 20.0, 30.0],  # Equal to references 0 and 2.
-            [2.0, 3.0, 4.0, 5.0, 7.0, 8.0],  # Equal to reference 1 and inside 0 and 2.
-            [-1.0, 3.0, 4.0, 5.0, 7.0, 8.0],  # Extends outside every reference.
-        ],
-        dtype=np.float64,
-    )
-    relations = PairwiseAABBRelations.from_aabbs(reference_aabbs=reference_aabbs, query_aabbs=query_aabbs)
-
-    expected_containment = np.array(
-        [[True, False, True, False], [True, True, True, True], [False, False, False, False]]
-    )
-    np.testing.assert_array_equal(relations.contained_by_mask(), expected_containment)
-
-    self_relations = PairwiseAABBRelations.from_aabbs(reference_aabbs=query_aabbs, query_aabbs=query_aabbs)
-    np.testing.assert_array_equal(
-        np.diag(self_relations.contained_by_mask()), np.ones(query_aabbs.shape[0], dtype=bool)
-    )
-
-    empty_query_relations = PairwiseAABBRelations.from_aabbs(
-        reference_aabbs=reference_aabbs, query_aabbs=np.empty((0, 6), dtype=np.float64)
-    )
-    np.testing.assert_array_equal(
-        empty_query_relations.contained_by_mask(), np.empty((0, reference_aabbs.shape[0]), dtype=bool)
-    )
-
-    empty_reference_relations = PairwiseAABBRelations.from_aabbs(
-        reference_aabbs=np.empty((0, 6), dtype=np.float64), query_aabbs=query_aabbs
-    )
-    np.testing.assert_array_equal(
-        empty_reference_relations.contained_by_mask(), np.empty((query_aabbs.shape[0], 0), dtype=bool)
-    )
-
-    both_empty_relations = PairwiseAABBRelations.from_aabbs(
-        reference_aabbs=np.empty((0, 6), dtype=np.float64), query_aabbs=np.empty((0, 6), dtype=np.float64)
-    )
-    np.testing.assert_array_equal(both_empty_relations.contained_by_mask(), np.empty((0, 0), dtype=bool))
+    query_aabbs = source[::2]
+    reference_aabbs = source[1:]
+    assert not query_aabbs.is_contiguous()
+    query_before = query_aabbs.clone()
+    reference_before = reference_aabbs.clone()
+    result = aabb.overlap_lengths_all_axes(query_aabbs, reference_aabbs)
+    assert result.dtype == dtype
+    patches, face_contact_mask = aabb.query_face_contact_patches(query_aabbs, reference_aabbs, distance_tolerance=1.0)
+    assert patches.dtype == dtype
+    assert patches.device == source.device
+    assert face_contact_mask.dtype == torch.bool
+    assert face_contact_mask.device == source.device
+    torch.testing.assert_close(query_aabbs, query_before)
+    torch.testing.assert_close(reference_aabbs, reference_before)

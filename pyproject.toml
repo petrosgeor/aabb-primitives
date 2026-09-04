@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aabb-primitives"
-version = "0.1.0"
-description = "Vectorized pairwise relationships between axis-aligned bounding boxes."
+version = "0.2.0"
+description = "Pairwise AABB geometry, predicates, and contact patches with Torch tensors."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
@@ -15,13 +15,28 @@ authors = [
 dependencies = [
     "beartype",
     "jaxtyping",
+    "torch",
+]
+
+[project.optional-dependencies]
+examples = [
     "numpy",
+    "plotly",
 ]
 
 [dependency-groups]
 dev = [
     "pytest",
     "ruff",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aabb_primitives"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src", "/tests", "/examples", "/docs/assets",
+    "/README.md", "/LICENSE", "/pyproject.toml", "/uv.lock", "/.python-version",
 ]
 
 [tool.ruff]
@@ -35,9 +50,8 @@ select = ["E4", "E7", "E9", "F", "I"]
 
 [tool.ruff.lint.per-file-ignores]
 # Jaxtyping shape strings are not Python forward-reference expressions.
-# Single-axis "query" shapes use inline F821 exceptions; undefined-name checks stay enabled elsewhere.
+# Undefined-name checks stay enabled outside these shape expressions.
 "src/aabb_primitives/relations.py" = ["F722"]
-"src/aabb_primitives/_thresholds.py" = ["F722"]
 
 [tool.ruff.lint.isort]
 split-on-trailing-comma = false
