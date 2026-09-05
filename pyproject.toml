@@ -35,7 +35,7 @@ packages = ["src/aabb_primitives"]
 
 [tool.hatch.build.targets.sdist]
 include = [
-    "/src", "/tests", "/examples", "/docs/assets",
+    "/src", "/tests", "/examples", "/docs/assets", "/docs/reference.md",
     "/README.md", "/LICENSE", "/pyproject.toml", "/uv.lock", "/.python-version",
 ]
 
